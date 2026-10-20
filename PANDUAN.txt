@@ -1,0 +1,15 @@
+WEBSITE V3 - VERSI FILE BESAR
+
+1. Buat repository GitHub baru: excel-zip-merger-v3
+2. Upload app.py dan requirements.txt pada root repository.
+3. Buat file baru di GitHub dengan nama .streamlit/config.toml dan salin isinya dari paket ini.
+4. Streamlit Community Cloud -> Create app -> Deploy from GitHub.
+5. Repository username/excel-zip-merger-v3, branch main, main file app.py.
+6. Buka website; coba ZIP kecil dahulu, lalu naik bertahap.
+
+Batas di config adalah 1024 MB = 1 GB per file upload; BUKAN jaminan server mampu memproses 1 GB.
+Tidak ada batas jumlah file/baris yang sengaja ditentukan di app.py.
+Server, penyimpanan sementara, waktu eksekusi, dan memori tetap terbatas.
+CSV besar bisa melebihi kapasitas Excel untuk menampilkan semua baris; XLSX dipisah per sheet.
+Untuk hasil Excel ratusan ribu baris, tunggu beberapa saat selama pembuatan XLSX.
+Jangan upload data perusahaan rahasia tanpa persetujuan dan pengamanan yang memadai.
