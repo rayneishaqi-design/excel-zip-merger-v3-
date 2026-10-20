@@ -83,7 +83,11 @@ def iter_sheet(z, info, sheet):
         with z.open(info) as f:
             book = load_workbook(io.BytesIO(f.read()), read_only=True, data_only=True)
             try:
-                for row in book[sheet].iter_rows(values_only=True):
+                tab = book[sheet]
+                # Excel tertentu menyimpan metadata dimensi salah (misalnya A1:A1)
+                # meskipun ribuan baris sebenarnya ada. Paksa baca isi XML asli.
+                tab.reset_dimensions()
+                for row in tab.iter_rows(values_only=True):
                     yield row
             finally:
                 book.close()
