@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import shutil
 import tempfile
 import zipfile
 from collections import Counter
@@ -10,9 +11,9 @@ import streamlit as st
 from openpyxl import Workbook, load_workbook
 import xlrd
 
-st.set_page_config(page_title="Gabung Excel dari ZIP - Data Besar", page_icon="📁", layout="wide")
-st.title("📁 Gabung Excel dari ZIP — Data Besar")
-st.write("Gabungkan banyak file Excel/CSV di dalam ZIP. Tidak ada batas jumlah file/baris buatan aplikasi; kemampuan tetap bergantung pada kapasitas server.")
+st.set_page_config(page_title="Gabung Excel dan CSV — ZIP atau Langsung", page_icon="📁", layout="wide")
+st.title("📁 Gabung Excel & CSV — ZIP atau Upload Langsung")
+st.write("Upload banyak file ZIP, Excel (.xlsx/.xls), CSV, atau campuran semuanya. Data digabung berdasarkan nama kolom. Kapasitas tergantung server.")
 st.warning("File diproses di server. Jangan unggah data rahasia ke layanan publik tanpa izin. Lakukan uji dengan data contoh dahulu.")
 
 EXTS = (".xlsx", ".xls", ".csv")
@@ -211,7 +212,60 @@ def build(zipfile_path, mode, wanted, add_source, progress):
         # Retain temp data for debugging until Streamlit process clears it.
         raise
 
-uploaded = st.file_uploader('Pilih ZIP berisi file Excel/CSV', type=['zip'])
+def stage_uploads_as_zip(uploads):
+    """Buat arsip sementara dari unggahan langsung dan isi ZIP, tanpa memuat semua file ke RAM."""
+    tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+    tmp.close()
+    seen = set()
+    staged = 0
+    notes = []
+    try:
+        # ZIP_STORED menghindari kompresi ulang yang lambat; sumber dipindahkan bertahap.
+        with zipfile.ZipFile(tmp.name, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as out:
+            for up_index, upload in enumerate(uploads, 1):
+                fname = PurePosixPath(upload.name.replace('\\', '/')).name
+                if fname.lower().endswith('.zip'):
+                    upload.seek(0)
+                    try:
+                        with zipfile.ZipFile(upload) as incoming:
+                            for info in incoming.infolist():
+                                inner = PurePosixPath(info.filename.replace('\\', '/'))
+                                if info.is_dir() or inner.name.startswith(('.', '~$')) or not inner.name.lower().endswith(EXTS):
+                                    continue
+                                if info.flag_bits & 1:
+                                    notes.append(f'{fname}: anggota terenkripsi dilewati: {info.filename}')
+                                    continue
+                                # Nama diarsipkan memakai awalan sumber agar asal file terlacak.
+                                member = f'Upload_{up_index}_{fname}/{inner.as_posix().lstrip("/")}'
+                                if member in seen:
+                                    notes.append(f'Nama file berulang di {fname}: {info.filename}')
+                                    continue
+                                seen.add(member)
+                                with incoming.open(info) as src, out.open(member, 'w', force_zip64=True) as dst:
+                                    shutil.copyfileobj(src, dst, length=1024*1024)
+                                staged += 1
+                    except (zipfile.BadZipFile, RuntimeError, OSError) as exc:
+                        notes.append(f'{fname}: ZIP gagal dibaca ({type(exc).__name__}: {exc})')
+                elif fname.lower().endswith(EXTS):
+                    member = f'Upload_langsung/{up_index}_{fname}'
+                    upload.seek(0)
+                    with out.open(member, 'w', force_zip64=True) as dst:
+                        shutil.copyfileobj(upload, dst, length=1024*1024)
+                    staged += 1
+        if not staged:
+            raise ValueError('Tidak ada file Excel/CSV valid dalam unggahan.')
+        return tmp.name, staged, notes
+    except Exception:
+        os.remove(tmp.name)
+        raise
+
+uploads = st.file_uploader(
+    'Pilih satu atau banyak file ZIP / Excel / CSV',
+    type=['zip', 'xlsx', 'xls', 'csv'],
+    accept_multiple_files=True,
+    help='Anda dapat memilih sekaligus beberapa Excel, CSV, ZIP, atau mencampurnya.'
+)
+st.caption('Untuk memilih banyak file di Windows, tahan Ctrl sambil klik file, atau seret sekaligus ke area upload.')
 a,b = st.columns(2)
 with a:
     sheet_mode = st.selectbox('Sheet yang digabung', ['Sheet pertama', 'Semua sheet', 'Nama sheet tertentu'])
@@ -220,18 +274,15 @@ with b:
 add_source = st.checkbox('Tambahkan kolom asal file dan sheet', value=True)
 st.caption('Tidak ada penghapusan duplikat. Baris yang seluruhnya kosong dilewati; setiap baris lainnya dipertahankan. Kolom disatukan menurut nama header.')
 
-if uploaded and st.button('Proses ZIP', type='primary'):
+if uploads and st.button('Gabungkan file', type='primary'):
     progress = st.empty()
     try:
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp:
-            while True:
-                chunk = uploaded.read(1024 * 1024)
-                if not chunk:
-                    break
-                temp.write(chunk)
-            source_path = temp.name
+        source_path, staged_count, staging_notes = stage_uploads_as_zip(uploads)
         try:
-            st.session_state['result'] = build(source_path, sheet_mode, wanted_sheet.strip(), add_source, progress)
+            result = build(source_path, sheet_mode, wanted_sheet.strip(), add_source, progress)
+            result['staged_count'] = staged_count
+            result['staging_notes'] = staging_notes
+            st.session_state['result'] = result
         finally:
             os.remove(source_path)
     except (ValueError, zipfile.BadZipFile, OSError, MemoryError, Exception) as exc:
@@ -243,7 +294,9 @@ if 'result' in st.session_state:
     cols = st.columns(4)
     for col, label, value in zip(cols, ['File', 'Sheet', 'Baris gabungan', 'Masalah'], [res['files'],res['sheets'],res['rows'],res['problems']]):
         col.metric(label, f'{value:,}')
-    if res['problems']:
+    if res.get('staging_notes'):
+        st.warning('Beberapa unggahan tidak ikut: ' + ' | '.join(res['staging_notes'][:8]))
+    if res['problems'] or res.get('staging_notes'):
         st.error('Ada masalah pembacaan. Hasil mungkin tidak lengkap. Download dan periksa laporan.')
     else:
         st.success('Seluruh sheet terpilih selesai dibaca tanpa error terdeteksi. Tetap cocokkan sampel invoice dan nominal dengan sumber.')
